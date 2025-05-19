@@ -2,6 +2,7 @@ use axum::Router;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::get;
+use axum::routing::post;
 use axum_tws::WebSocket;
 use axum_tws::WebSocketUpgrade;
 use maud::DOCTYPE;
@@ -14,6 +15,7 @@ use tower_http::services::ServeDir;
 async fn main() -> anyhow::Result<()> {
     let mut app = Router::new()
         .route("/", get(index))
+        .route("/clicked", post(clicked))
         .nest_service("/assets", ServeDir::new("assets"));
 
     if cfg!(debug_assertions) {
@@ -49,11 +51,20 @@ fn header() -> Markup {
         (DOCTYPE)
         title { "midas" }
         meta charset="utf-8";
+        script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous" {}
         link href="/assets/output.css" rel="stylesheet";
         @if cfg!(debug_assertions) {
             script {
                 (PreEscaped(include_str!("hot_reload.js")))
             }
+        }
+    }
+}
+
+async fn clicked() -> Markup {
+    html! {
+        p {
+            "wowowowo"
         }
     }
 }
@@ -64,6 +75,9 @@ async fn index() -> impl IntoResponse {
         body class="font-display" {
             h1 { "Hello, World!" }
             p class="text-3xl text-green-600" { "Waht a syntax" }
+            button hx-post="/clicked" hx-swap="outerHTML" {
+                "Swap"
+            }
         }
     }
 }
