@@ -19,7 +19,7 @@
     flake-utils,
     ...
   }:
-    flake-utils.lib.eachDefaultSystem (
+    flake-utils.lib.eachSystem ["x86_64-linux"] (
       system: let
         pkgs = import nixpkgs {
           inherit system;
@@ -51,7 +51,6 @@
         midasPackage = craneLib.buildPackage (commonArgs
           // {
             inherit cargoArtifacts;
-            pname = "midas";
           });
 
         midasClippy = craneLib.cargoClippy (commonArgs
@@ -63,8 +62,19 @@
         midasFmt = craneLib.cargoFmt {
           inherit (commonArgs) src;
         };
+
+        dockerImage = pkgs.dockerTools.buildLayeredImage {
+          name = "midas";
+          tag = "latest";
+          config = {
+            Cmd = ["${midasPackage}/bin/midas"];
+          };
+        };
       in {
-        packages.default = midasPackage;
+        packages = {
+          default = midasPackage;
+          docker = dockerImage;
+        };
 
         checks = {
           inherit midasPackage midasFmt midasClippy;
@@ -74,7 +84,11 @@
           checks = self.checks.${system};
 
           packages = with pkgs; [
-            bacon
+            cargo-watch
+
+            #tailwindcss
+            tailwindcss_4
+            watchman
           ];
         };
 
