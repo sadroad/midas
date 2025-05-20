@@ -11,6 +11,8 @@ use maud::Markup;
 use maud::PreEscaped;
 use maud::html;
 use serde::Deserialize;
+use std::env;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::signal;
 use tower_http::services::ServeDir;
 
@@ -27,8 +29,12 @@ async fn main() -> anyhow::Result<()> {
         app = app.route("/_reload", get(handle_upgrade));
     }
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    println!("Server started at http://0.0.0.0:3000");
+    // Get port from environment variable, or use 3000 as default
+    let port = env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(3000);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+    
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    println!("Server started at http://0.0.0.0:{}", port);
     
     // Set up graceful shutdown
     let server = axum::serve(listener, app);
