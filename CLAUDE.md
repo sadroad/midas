@@ -74,3 +74,95 @@ nix build .#docker
 - The development server runs on port 3000
 - Hot reloading is only enabled in debug mode
 - The application uses HTMX for enhanced interactivity
+
+## Maud Reference
+
+Maud is a compile-time HTML templating engine for Rust used in this project.
+
+### Basic Syntax
+
+```rust
+html! {
+    h1 { "Title" }
+    p { "Paragraph with " strong { "bold text" } "." }
+    a href="https://example.com" { "Link" }
+    div.container#main { "Class and ID shortcuts" }
+}
+```
+
+### Variables and Expressions
+
+```rust
+let name = "User";
+html! {
+    p { "Hello, " (name) "!" }
+    p { "2 + 2 = " (2 + 2) }
+}
+```
+
+### Loops and Conditionals
+
+```rust
+let items = vec!["one", "two", "three"];
+let show_section = true;
+
+html! {
+    ul {
+        @for item in &items {
+            li { (item) }
+        }
+    }
+    
+    @if show_section {
+        section { "Visible content" }
+    } @else {
+        p { "Alternative content" }
+    }
+}
+```
+
+### Components and Layouts
+
+```rust
+fn layout(title: &str, content: Markup) -> Markup {
+    html! {
+        (maud::DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="UTF-8";
+                meta name="viewport" content="width=device-width, initial-scale=1.0";
+                title { (title) }
+                link rel="stylesheet" href="/static/css/main.css";
+            }
+            body {
+                header { (navbar("home")) }
+                main { (content) }
+                footer { "© 2025 My Website" }
+            }
+        }
+    }
+}
+
+async fn page_handler() -> Markup {
+    layout("Page Title", html! {
+        div#content {
+            "Page content"
+        }
+    })
+}
+```
+
+### HTMX Integration
+
+```rust
+html! {
+    button 
+        type="button"
+        hx-post="/api/endpoint"
+        hx-target="#target-element"
+        hx-swap="innerHTML"
+    {
+        "Click me"
+    }
+}
+```

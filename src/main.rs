@@ -3,12 +3,14 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
+use axum::extract::Form;
 use axum_tws::WebSocket;
 use axum_tws::WebSocketUpgrade;
 use maud::DOCTYPE;
 use maud::Markup;
 use maud::PreEscaped;
 use maud::html;
+use serde::Deserialize;
 use tokio::signal;
 use tower_http::services::ServeDir;
 
@@ -16,6 +18,8 @@ use tower_http::services::ServeDir;
 async fn main() -> anyhow::Result<()> {
     let mut app = Router::new()
         .route("/", get(index))
+        .route("/login", post(login_handler))
+        .route("/dashboard", get(dashboard))
         .route("/clicked", post(clicked))
         .nest_service("/assets", ServeDir::new("assets"));
 
@@ -78,14 +82,75 @@ async fn clicked() -> Markup {
     }
 }
 
+#[derive(Deserialize)]
+struct LoginForm {
+    username: String,
+    password: String,
+}
+
 async fn index() -> impl IntoResponse {
     html! {
         (header())
+        body class="font-display flex items-center justify-center min-h-screen bg-gray-100" {
+            div class="w-full max-w-md p-8 space-y-8 bg-white rounded-lg shadow-md" {
+                div class="text-center" {
+                    h1 class="text-3xl font-bold text-gray-900" { "Midas" }
+                    p class="mt-2 text-gray-600" { "Please sign in to your account" }
+                }
+                
+                form class="mt-8 space-y-6" action="/login" method="POST" {
+                    div class="space-y-4" {
+                        div {
+                            label class="block text-sm font-medium text-gray-700" for="username" { "Username" }
+                            input id="username" name="username" type="text" required
+                                class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500";
+                        }
+                        
+                        div {
+                            label class="block text-sm font-medium text-gray-700" for="password" { "Password" }
+                            input id="password" name="password" type="password" required
+                                class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500";
+                        }
+                    }
+                    
+                    div {
+                        button type="submit" 
+                            class="w-full px-4 py-2 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" {
+                            "Sign in"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn login_handler(Form(form): Form<LoginForm>) -> impl IntoResponse {
+    // In a real app, you would validate the credentials here
+    // For demo purposes, we'll just redirect to the dashboard
+    if !form.username.is_empty() && !form.password.is_empty() {
+        // Redirect to dashboard on successful login
+        axum::response::Redirect::to("/dashboard").into_response()
+    } else {
+        // Return to login page if validation fails (in a real app, you'd add an error message)
+        axum::response::Redirect::to("/").into_response()
+    }
+}
+
+async fn dashboard() -> impl IntoResponse {
+    html! {
+        (header())
         body class="font-display" {
-            h1 { "Hello, World!" }
-            p class="text-3xl text-green-600" { "Waht a syntax" }
-            button hx-post="/clicked" hx-swap="outerHTML" {
-                "Swap"
+            div class="p-8" {
+                h1 class="text-3xl font-bold mb-4" { "Dashboard" }
+                p class="mb-6" { "Welcome to your account dashboard!" }
+                
+                div class="flex space-x-4" {
+                    a href="/" class="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300" { "Back to Login" }
+                    button hx-post="/clicked" hx-swap="outerHTML" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700" {
+                        "Click Me"
+                    }
+                }
             }
         }
     }
