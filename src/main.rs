@@ -9,6 +9,7 @@ use maud::DOCTYPE;
 use maud::Markup;
 use maud::PreEscaped;
 use maud::html;
+use tokio::signal;
 use tower_http::services::ServeDir;
 
 #[tokio::main]
@@ -23,7 +24,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    axum::serve(listener, app).await?;
+    println!("Server started at http://0.0.0.0:3000");
+    
+    // Set up graceful shutdown
+    let server = axum::serve(listener, app);
+    
+    // Handle both SIGINT and SIGTERM
+    server.with_graceful_shutdown(shutdown_signal()).await?;
+    
+    println!("Server shutdown complete");
     Ok(())
 }
 
@@ -79,5 +88,33 @@ async fn index() -> impl IntoResponse {
                 "Swap"
             }
         }
+    }
+}
+
+/// Handle Ctrl+C (SIGINT) and SIGTERM signals for graceful shutdown
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        println!("Received Ctrl+C, initiating graceful shutdown");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+        println!("Received SIGTERM, initiating graceful shutdown");
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    // Wait for either signal
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 }
