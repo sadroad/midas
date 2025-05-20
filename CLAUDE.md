@@ -166,3 +166,120 @@ html! {
     }
 }
 ```
+
+## HTMX Reference
+
+HTMX is a lightweight JavaScript library that allows you to access modern browser features directly from HTML using attributes without writing JavaScript.
+
+### Core Concepts
+
+HTMX extends HTML as hypertext by allowing:
+- Any element to issue HTTP requests (not just anchors and forms)
+- Any event to trigger requests (not just clicks or form submissions)
+- Any HTTP verb to be used (GET, POST, PUT, DELETE, etc.)
+- Any element to be the target for updates (not just the entire window)
+
+The server typically responds with HTML fragments, not JSON, maintaining the hypertext programming model.
+
+### Key Attributes
+
+Here are the most commonly used HTMX attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `hx-get`, `hx-post`, `hx-put`, `hx-delete` | Specifies the URL to make an AJAX request to and the HTTP method |
+| `hx-trigger` | The event that triggers the request (default: click for buttons, submit for forms) |
+| `hx-target` | The element to target for the response (CSS selector) |
+| `hx-swap` | How to swap the response content (innerHTML, outerHTML, beforeend, afterbegin) |
+| `hx-push-url` | Push a new URL into the browser history stack (true, false) |
+| `hx-select` | Select a subset of the response to be swapped in |
+| `hx-indicator` | Element to show during the request (for loading indicators) |
+| `hx-confirm` | Shows a confirmation dialog before making the request |
+| `hx-boost` | Enhances regular anchors and forms with AJAX |
+
+### Example Patterns
+
+**Request With Loading Indicator:**
+```rust
+html! {
+    button 
+        hx-post="/api/process"
+        hx-target="#results"
+        hx-indicator="#spinner"
+    {
+        "Process Data"
+    }
+    
+    div#spinner.htmx-indicator {
+        // Spinner content
+    }
+}
+```
+
+**Polling for Updates:**
+```rust
+html! {
+    div 
+        hx-get="/api/updates"
+        hx-trigger="every 2s"
+        hx-swap="innerHTML"
+    {
+        // Content updated every 2 seconds
+    }
+}
+```
+
+**Form With Validation:**
+```rust
+html! {
+    form 
+        hx-post="/api/submit"
+        hx-target="#form-result"
+        hx-swap="outerHTML"
+    {
+        // Form fields
+        input type="text" name="username" {}
+        button { "Submit" }
+    }
+}
+```
+
+### Server-Side Integration with Axum
+
+When processing HTMX requests in Axum handlers:
+
+1. Check for the `HX-Request` header to identify HTMX requests
+2. Return HTML fragments instead of full pages for HTMX requests
+3. Use appropriate HTTP status codes for validation errors (422 for form validation)
+
+```rust
+async fn handle_htmx(
+    headers: HeaderMap,
+    form: Form<MyForm>,
+) -> impl IntoResponse {
+    let is_htmx = headers.contains_key("HX-Request");
+    
+    if is_htmx {
+        // Return HTML fragment
+        html! {
+            div { "Success! Item created." }
+        }
+    } else {
+        // Return full page
+        layout("Success", html! {
+            div { "Success! Item created." }
+        })
+    }
+}
+```
+
+### Event Handling
+
+HTMX triggers various events during its request lifecycle that can be captured with JavaScript:
+
+- `htmx:load` - fired when new content is added to the DOM
+- `htmx:beforeRequest` - fired before an AJAX request is made
+- `htmx:afterRequest` - fired after an AJAX request completes
+- `htmx:responseError` - fired when an error response is received
+
+These events can be used to integrate with other JavaScript or perform additional actions.
