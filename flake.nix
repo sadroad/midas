@@ -25,6 +25,7 @@
           inherit system;
           overlays = [rust-overlay.overlays.default];
         };
+        lib = pkgs.lib;
 
         craneLib = (crane.mkLib pkgs).overrideToolchain (
           toolchainPkgs:
@@ -32,14 +33,24 @@
             ./rust-toolchain.toml
         );
 
+        unfilteredRoot = ./.;
+
         commonArgs = {
-          src = craneLib.cleanCargoSource ./.;
+          src = lib.fileset.toSource {
+            root = unfilteredRoot;
+            fileset = lib.fileset.unions [
+              (craneLib.fileset.commonCargoSources unfilteredRoot)
+              (lib.fileset.fileFilter (file: lib.any file.hasExt ["js" "css"]) unfilteredRoot)
+              (lib.fileset.maybeMissing ./assets)
+            ];
+          };
           strictDeps = true;
 
           buildInputs = with pkgs; [
           ];
 
           nativeBuildInputs = with pkgs; [
+            tailwindcss_4
           ];
         };
 
@@ -51,6 +62,19 @@
         midasPackage = craneLib.buildPackage (commonArgs
           // {
             inherit cargoArtifacts;
+            CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+            CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+            preBuild = ''
+              mkdir -p assets
+            '';
+            postInstall = ''
+              if [ -d "./assets" ]; then
+                mkdir -p $out/assets
+                cp -rT ./assets $out/assets
+              else
+                echo "Warning: ./assets doesn't exist"
+              fi
+            '';
           });
 
         midasClippy = craneLib.cargoClippy (commonArgs
@@ -68,7 +92,13 @@
           tag = "latest";
           config = {
             Cmd = ["${midasPackage}/bin/midas"];
+            ExposedPorts = {
+              "3000/tcp" = {};
+            };
           };
+          contents = [
+            midasPackage
+          ];
         };
       in {
         packages = {
