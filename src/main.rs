@@ -37,11 +37,35 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Get port from environment variable, or use 3000 as default
-    let port = env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(3000);
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+    let requested_port = env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(3000);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), requested_port);
     
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("Server started at http://0.0.0.0:{}", port);
+    // Try to bind to the requested port
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => {
+            println!("Server started at http://0.0.0.0:{}", requested_port);
+            listener
+        },
+        Err(e) => {
+            // If the port is in use, bind to port 0 to let OS assign a free port
+            if e.kind() == std::io::ErrorKind::AddrInUse {
+                println!("Port {} is already in use. Trying to bind to a random available port...", requested_port);
+                
+                // Bind to port 0 (OS will assign an available port)
+                let fallback_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+                let listener = tokio::net::TcpListener::bind(fallback_addr).await?;
+                
+                // Get the actual port assigned by the OS
+                let actual_port = listener.local_addr()?.port();
+                println!("Server started at http://0.0.0.0:{}", actual_port);
+                
+                listener
+            } else {
+                // For other errors, return the original error
+                return Err(e.into());
+            }
+        }
+    };
     
     // Set up graceful shutdown
     let server = axum::serve(listener, app);
