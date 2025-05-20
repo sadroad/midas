@@ -1,10 +1,10 @@
 use axum::Router;
+use axum::extract::Form;
+use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
-use axum::extract::Form;
-use axum::extract::State;
 use axum_tws::WebSocket;
 use axum_tws::WebSocketUpgrade;
 use maud::DOCTYPE;
@@ -17,11 +17,20 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::signal;
 use tower_http::services::ServeDir;
+use tracing::{Level, info, warn};
+use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize the tracing subscriber for logging
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
+
+    info!("Starting Midas application");
     let state = create_app_state();
-    
+
     let mut app = Router::new()
         .route("/", get(index))
         .route("/login", post(login_handler))
@@ -37,28 +46,38 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Get port from environment variable, or use 3000 as default
-    let requested_port = env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(3000);
+    let requested_port = env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3000);
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), requested_port);
-    
+
     // Try to bind to the requested port
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => {
-            println!("Server started at http://0.0.0.0:{}", requested_port);
+            let addr = listener.local_addr()?;
+            info!("Server started at http://0.0.0.0:{}", addr.port());
             listener
-        },
+        }
         Err(e) => {
             // If the port is in use, bind to port 0 to let OS assign a free port
             if e.kind() == std::io::ErrorKind::AddrInUse {
-                println!("Port {} is already in use. Trying to bind to a random available port...", requested_port);
-                
+                println!(
+                    "Port {} is already in use. Trying to bind to a random available port...",
+                    requested_port
+                );
+
                 // Bind to port 0 (OS will assign an available port)
                 let fallback_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
                 let listener = tokio::net::TcpListener::bind(fallback_addr).await?;
-                
+
                 // Get the actual port assigned by the OS
                 let actual_port = listener.local_addr()?.port();
-                println!("Server started at http://0.0.0.0:{}", actual_port);
-                
+                info!(
+                    "Server started at http://0.0.0.0:{} (fallback port)",
+                    actual_port
+                );
+
                 listener
             } else {
                 // For other errors, return the original error
@@ -66,14 +85,14 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
-    
+
     // Set up graceful shutdown
     let server = axum::serve(listener, app);
-    
+
     // Handle both SIGINT and SIGTERM
     server.with_graceful_shutdown(shutdown_signal()).await?;
-    
-    println!("Server shutdown complete");
+
+    info!("Server shutdown complete");
     Ok(())
 }
 
@@ -81,7 +100,7 @@ async fn handle_upgrade(ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade({
         move |socket| async {
             if let Err(e) = handle_ws(socket).await {
-                println!("Websocket Error: {:?}", e);
+                warn!("WebSocket Error: {:?}", e);
             }
         }
     })
@@ -183,7 +202,7 @@ async fn index() -> impl IntoResponse {
                     h1 class="text-3xl font-bold text-gray-900" { "Midas" }
                     p class="mt-2 text-gray-600" { "Please sign in to your account" }
                 }
-                
+
                 form class="mt-8 space-y-6" action="/login" method="POST" {
                     div class="space-y-4" {
                         div {
@@ -191,16 +210,16 @@ async fn index() -> impl IntoResponse {
                             input id="username" name="username" type="text" required
                                 class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500";
                         }
-                        
+
                         div {
                             label class="block text-sm font-medium text-gray-700" for="password" { "Password" }
                             input id="password" name="password" type="password" required
                                 class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500";
                         }
                     }
-                    
+
                     div {
-                        button type="submit" 
+                        button type="submit"
                             class="w-full px-4 py-2 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" {
                             "Sign in"
                         }
@@ -217,15 +236,26 @@ async fn login_handler(Form(form): Form<LoginForm>) -> impl IntoResponse {
     if !form.username.is_empty() && !form.password.is_empty() {
         // Check if the user has admin privileges
         let is_admin_user = is_admin(&form.username);
-        
+
+        // Log successful login
+        info!(
+            "User logged in - username: {}, role: {}",
+            form.username,
+            if is_admin_user { "admin" } else { "regular" }
+        );
+
         // Redirect to dashboard on successful login with username and role as query params
         // In a real app, you would use proper session management (JWT, cookies, etc.)
-        let redirect_url = format!("/dashboard?user={}&role={}", 
-            form.username, 
+        let redirect_url = format!(
+            "/dashboard?user={}&role={}",
+            form.username,
             if is_admin_user { "admin" } else { "regular" }
         );
         axum::response::Redirect::to(&redirect_url).into_response()
     } else {
+        // Log failed login attempt
+        warn!("Failed login attempt - empty username or password");
+
         // Return to login page if validation fails (in a real app, you'd add an error message)
         axum::response::Redirect::to("/").into_response()
     }
@@ -236,19 +266,31 @@ async fn dashboard(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     // Get username and role from query params
-    let username = params.get("user").cloned().unwrap_or_else(|| "Anonymous".to_string());
-    let role = params.get("role").cloned().unwrap_or_else(|| "regular".to_string());
+    let username = params
+        .get("user")
+        .cloned()
+        .unwrap_or_else(|| "Anonymous".to_string());
+    let role = params
+        .get("role")
+        .cloned()
+        .unwrap_or_else(|| "regular".to_string());
     let is_admin_user = role == "admin";
-    
+
     // Check for error or success messages
     let error_message = params.get("error").map(|e| match e.as_str() {
-        "invalid_retailer" => "Invalid retailer. Please select a supported retailer from the dropdown.",
-        "invalid_url" => "The URL doesn't match the selected retailer. Please enter a valid product URL.",
-        _ => "An error occurred. Please try again."
+        "invalid_retailer" => {
+            "Invalid retailer. Please select a supported retailer from the dropdown."
+        }
+        "invalid_url" => {
+            "The URL doesn't match the selected retailer. Please enter a valid product URL."
+        }
+        _ => "An error occurred. Please try again.",
     });
-    
-    let success_message = params.get("success").map(|_| "Product successfully added for tracking!");
-    
+
+    let success_message = params
+        .get("success")
+        .map(|_| "Product successfully added for tracking!");
+
     html! {
         (header())
         body class="font-display" {
@@ -265,14 +307,14 @@ async fn dashboard(
                         }
                         a href="/" class="text-indigo-600 hover:text-indigo-800" { "Sign Out" }
                     }
-                    p class="text-gray-600" { 
+                    p class="text-gray-600" {
                         @if is_admin_user {
-                            "Admin dashboard - you can view and manage all user products" 
+                            "Admin dashboard - you can view and manage all user products"
                         } @else {
                             "Welcome to your Midas Product Tracker dashboard!"
                         }
                     }
-                    
+
                     // Show error message if present
                     @if let Some(message) = error_message {
                         div class="mt-4 p-4 border border-red-300 bg-red-50 text-red-800 rounded-md" {
@@ -284,7 +326,7 @@ async fn dashboard(
                             }
                         }
                     }
-                    
+
                     // Show success message if present
                     @if let Some(message) = success_message {
                         div class="mt-4 p-4 border border-green-300 bg-green-50 text-green-800 rounded-md" {
@@ -297,12 +339,12 @@ async fn dashboard(
                         }
                     }
                 }
-                
+
                 // Product Tracker Section
                 div class="bg-white shadow rounded-lg p-6 mb-8" {
                     h2 class="text-2xl font-bold mb-4 text-gray-800" { "Add Product to Track" }
                     p class="mb-6 text-gray-600" { "Submit products you'd like to track for availability and price changes." }
-                    
+
                     div class="mb-6 bg-blue-50 rounded-lg p-4 border border-blue-200" {
                         div class="flex items-center" {
                             svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20" {
@@ -323,20 +365,20 @@ async fn dashboard(
                             }
                         }
                     }
-                    
+
                     form class="space-y-4" action=(format!("/add-product?user={}&role={}", username, role)) method="POST" {
                         div {
                             label class="block text-sm font-medium text-gray-700" for="url" { "Product URL" }
                             input id="url" name="url" type="url" required placeholder="https://www.amazon.com/dp/B08FC6MR62 or https://www.bestbuy.com/site/..."
                                 class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500";
                         }
-                        
+
                         div {
                             label class="block text-sm font-medium text-gray-700" for="name" { "Product Name" }
                             input id="name" name="name" type="text" required placeholder="e.g. PlayStation 5 Digital Edition"
                                 class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500";
                         }
-                        
+
                         div {
                             label class="block text-sm font-medium text-gray-700" for="retailer" { "Retailer" }
                             select id="retailer" name="retailer" required
@@ -346,7 +388,7 @@ async fn dashboard(
                                 }
                             }
                         }
-                        
+
                         div {
                             label class="block text-sm font-medium text-gray-700" for="target_price" { "Target Price (Optional)" }
                             div class="mt-1 relative rounded-md shadow-sm" {
@@ -357,32 +399,32 @@ async fn dashboard(
                                     class="w-full pl-7 pr-12 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500";
                             }
                         }
-                        
+
                         div {
-                            button type="submit" 
+                            button type="submit"
                                 class="w-full px-4 py-2 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" {
                                 "Add Product"
                             }
                         }
                     }
                 }
-                
+
                 // View Products Section
                 div class="bg-white shadow rounded-lg p-6" {
                     div class="flex justify-between items-center mb-4" {
                         h2 class="text-2xl font-bold text-gray-800" { "Your Tracked Products" }
                         a href="/products" class="text-indigo-600 hover:text-indigo-800" { "View All Products" }
                     }
-                    
+
                     @let all_products = state.lock().unwrap();
-                    
+
                     // Filter products based on user role - admins see all, regular users see only their own
                     @let visible_products: Vec<_> = if is_admin_user {
                         all_products.iter().collect()
                     } else {
                         all_products.iter().filter(|p| p.added_by == username).collect()
                     };
-                    
+
                     @if visible_products.is_empty() {
                         div class="text-center py-8 text-gray-500" {
                             p { "You haven't added any products to track yet." }
@@ -400,21 +442,21 @@ async fn dashboard(
                                 span class="text-xs text-gray-500" { "Showing all user products" }
                             }
                         }
-                        
+
                         // Display the 3 most recent products
                         div class="space-y-4" {
                             @for product in visible_products.iter().rev().take(3) {
                                 div class="border rounded-lg p-4 hover:bg-gray-50" {
                                     div class="flex justify-between" {
                                         h3 class="font-semibold text-lg text-gray-800" { (product.name) }
-                                        
+
                                         @if is_admin_user && product.added_by != username {
                                             span class="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded" {
                                                 "Added by: " (product.added_by)
                                             }
                                         }
                                     }
-                                    
+
                                     div class="text-sm text-gray-600 mt-1 overflow-hidden text-ellipsis" {
                                         a href=(product.url) target="_blank" class="text-indigo-600 hover:underline" { "View on " (product.retailer) }
                                     }
@@ -437,22 +479,28 @@ async fn add_product(
     Form(form): Form<ProductForm>,
 ) -> impl IntoResponse {
     // Get username and role from query params
-    let username = params.get("user").cloned().unwrap_or_else(|| "Anonymous".to_string());
-    let role = params.get("role").cloned().unwrap_or_else(|| "regular".to_string());
-    
+    let username = params
+        .get("user")
+        .cloned()
+        .unwrap_or_else(|| "Anonymous".to_string());
+    let role = params
+        .get("role")
+        .cloned()
+        .unwrap_or_else(|| "regular".to_string());
+
     // Validate that the URL is from a supported retailer
     let is_valid_retailer = supported_retailers().contains(&form.retailer.as_str());
-    
+
     // Validate that URLs actually come from the corresponding domains
     let is_valid_url = match form.retailer.as_str() {
         "Best Buy" => form.url.to_lowercase().contains("bestbuy.com"),
         "Amazon" => {
             let url = form.url.to_lowercase();
             url.contains("amazon.com") || url.contains("amzn.to") || url.contains("a.co")
-        },
+        }
         _ => false,
     };
-    
+
     // If validation fails, redirect back to dashboard with error
     if !is_valid_retailer || !is_valid_url {
         // Construct appropriate error message
@@ -461,16 +509,26 @@ async fn add_product(
         } else {
             "invalid_url"
         };
-        
-        let redirect_url = format!("/dashboard?user={}&role={}&error={}", username, role, error_msg);
+
+        // Log validation failure
+        warn!(
+            "Product validation failed - error: {}, url: {}, retailer: {}, added by: {}",
+            error_msg, form.url, form.retailer, username
+        );
+
+        let redirect_url = format!(
+            "/dashboard?user={}&role={}&error={}",
+            username, role, error_msg
+        );
         return axum::response::Redirect::to(&redirect_url).into_response();
     }
-    
+
     // Convert target price from string to float if provided
-    let target_price = form.target_price
+    let target_price = form
+        .target_price
         .filter(|s| !s.is_empty())
         .and_then(|s| s.parse::<f64>().ok());
-    
+
     // Create new product
     let product = Product {
         url: form.url,
@@ -480,10 +538,16 @@ async fn add_product(
         added_by: username.clone(),
         created_at: std::time::SystemTime::now(),
     };
-    
+
+    // Log product addition
+    info!(
+        "Product added - name: {}, retailer: {}, added by: {}, target price: {:?}",
+        product.name, product.retailer, username, product.target_price
+    );
+
     // Add to state
     state.lock().unwrap().push(product);
-    
+
     // Redirect back to dashboard
     let redirect_url = format!("/dashboard?user={}&role={}&success=true", username, role);
     axum::response::Redirect::to(&redirect_url).into_response()
@@ -493,16 +557,22 @@ async fn view_products(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let username = params.get("user").cloned().unwrap_or_else(|| "Anonymous".to_string());
-    let role = params.get("role").cloned().unwrap_or_else(|| "regular".to_string());
+    let username = params
+        .get("user")
+        .cloned()
+        .unwrap_or_else(|| "Anonymous".to_string());
+    let role = params
+        .get("role")
+        .cloned()
+        .unwrap_or_else(|| "regular".to_string());
     let is_admin_user = role == "admin";
-    
+
     html! {
         (header())
         body class="font-display" {
             div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" {
                 div class="flex justify-between items-center mb-6" {
-                    h1 class="text-3xl font-bold text-gray-900" { 
+                    h1 class="text-3xl font-bold text-gray-900" {
                         @if is_admin_user {
                             "All User Products"
                         } @else {
@@ -511,7 +581,7 @@ async fn view_products(
                     }
                     a href=(format!("/dashboard?user={}&role={}", username, role)) class="text-indigo-600 hover:text-indigo-800" { "Back to Dashboard" }
                 }
-                
+
                 @if is_admin_user {
                     div class="mb-6 bg-purple-50 p-4 rounded-lg border border-purple-200 flex items-center" {
                         svg class="h-5 w-5 text-purple-600 mr-2" fill="currentColor" viewBox="0 0 20 20" {
@@ -521,17 +591,17 @@ async fn view_products(
                         span class="ml-1 text-purple-700" { "You can see all user products" }
                     }
                 }
-                
+
                 div class="bg-white shadow rounded-lg p-6" {
                     @let all_products = state.lock().unwrap();
-                    
+
                     // Filter products based on user role - admins see all, regular users see only their own
                     @let visible_products: Vec<_> = if is_admin_user {
                         all_products.iter().collect()
                     } else {
                         all_products.iter().filter(|p| p.added_by == username).collect()
                     };
-                    
+
                     @if visible_products.is_empty() {
                         div class="text-center py-10 text-gray-500" {
                             p class="text-lg" { "No products found" }
@@ -544,7 +614,7 @@ async fn view_products(
                                 div class="text-sm text-gray-500" {
                                     span class="font-medium" { "Total products: " } (visible_products.len())
                                 }
-                                
+
                                 // In a real app, you'd have filtering options here
                                 div class="flex space-x-2 text-sm" {
                                     span class="text-gray-600" { "Filter by:" }
@@ -554,7 +624,7 @@ async fn view_products(
                                 }
                             }
                         }
-                    
+
                         div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
                             @for product in visible_products.iter().rev() {
                                 @let (border_color, bg_hover) = match product.retailer.as_str() {
@@ -562,39 +632,39 @@ async fn view_products(
                                     "Best Buy" => ("border-blue-200", "hover:bg-blue-50"),
                                     _ => ("border-gray-200", "hover:bg-gray-50"),
                                 };
-                                
+
                                 div class=(format!("border rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow {} {}", border_color, bg_hover)) {
                                     div class="flex justify-between items-start" {
                                         h3 class="font-semibold text-lg text-gray-800" { (product.name) }
-                                        
+
                                         @let (badge_color, badge_text) = match product.retailer.as_str() {
                                             "Amazon" => ("bg-orange-100 text-orange-800", "Amazon"),
                                             "Best Buy" => ("bg-blue-100 text-blue-800", "Best Buy"),
                                             _ => ("bg-gray-100 text-gray-800", product.retailer.as_str()),
                                         };
-                                        
+
                                         span class=(format!("text-xs rounded-full px-2 py-1 {}", badge_color)) {
                                             (badge_text)
                                         }
                                     }
-                                    
+
                                     div class="text-sm text-gray-600 mt-2 truncate" {
                                         a href=(product.url) target="_blank" class="text-indigo-600 hover:underline" { "View product" }
                                     }
-                                    
+
                                     @if let Some(price) = product.target_price {
                                         p class="mt-3 text-sm text-gray-700" { "Target Price: $" (format!("{:.2}", price)) }
                                     }
-                                    
+
                                     @if is_admin_user || product.added_by == username {
                                         div class="mt-4 pt-3 border-t border-gray-100 flex justify-between items-center" {
-                                            p class="text-xs text-gray-500" { 
-                                                "Added by: " 
+                                            p class="text-xs text-gray-500" {
+                                                "Added by: "
                                                 span class=(if product.added_by == username { "font-medium text-indigo-600" } else { "text-gray-600" }) {
                                                     (product.added_by)
                                                 }
                                             }
-                                            
+
                                             @if is_admin_user {
                                                 // Admin actions (in a real app, these would be functional)
                                                 div class="flex space-x-1" {
@@ -624,7 +694,7 @@ async fn shutdown_signal() {
         signal::ctrl_c()
             .await
             .expect("Failed to install Ctrl+C handler");
-        println!("Received Ctrl+C, initiating graceful shutdown");
+        info!("Received Ctrl+C, initiating graceful shutdown");
     };
 
     #[cfg(unix)]
@@ -633,7 +703,7 @@ async fn shutdown_signal() {
             .expect("Failed to install SIGTERM handler")
             .recv()
             .await;
-        println!("Received SIGTERM, initiating graceful shutdown");
+        info!("Received SIGTERM, initiating graceful shutdown");
     };
 
     #[cfg(not(unix))]

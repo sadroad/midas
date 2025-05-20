@@ -12,6 +12,7 @@ Midas is a web application built with Rust using the Axum web framework and Maud
 - **HTML Templating**: Uses Maud for type-safe HTML templates
 - **CSS**: TailwindCSS for styling, processed during build
 - **Hot Reloading**: JavaScript-based hot reloading for development through websockets
+- **Logging**: Uses tracing and tracing-subscriber for structured logging
 - **Deployment**: Docker image configuration available through Nix flakes
 
 ## Development Environment
